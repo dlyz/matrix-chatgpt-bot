@@ -1,4 +1,3 @@
-import ChatGPTClient from '@waylaidwanderer/chatgpt-api';
 import { LogService, MatrixClient, UserID } from "matrix-bot-sdk";
 import { CHATGPT_CONTEXT, CHATGPT_TIMEOUT, CHATGPT_IGNORE_MEDIA, MATRIX_DEFAULT_PREFIX_REPLY, MATRIX_DEFAULT_PREFIX, MATRIX_BLACKLIST, MATRIX_WHITELIST, MATRIX_RICH_TEXT, MATRIX_PREFIX_DM, MATRIX_THREADS, MATRIX_ROOM_BLACKLIST, MATRIX_ROOM_WHITELIST } from "./env.js";
 import { RelatesTo, MessageEvent, StoredConversation, StoredConversationConfig } from "./interfaces.js";
@@ -35,7 +34,7 @@ export default class CommandHandler {
     if (MATRIX_WHITELIST && !MATRIX_WHITELIST.split(" ").find(w => event.sender.endsWith(w))) return true;      // Ignore if not on whitelist if set
     if (MATRIX_ROOM_BLACKLIST &&  MATRIX_ROOM_BLACKLIST.split(" ").find(b => roomId.endsWith(b))) return true;  // Ignore if on room blacklist if set
     if (MATRIX_ROOM_WHITELIST && !MATRIX_ROOM_WHITELIST.split(" ").find(w => roomId.endsWith(w))) return true;  // Ignore if not on room whitelist if set
-    if (Date.now() - event.origin_server_ts > 10000) return true;                                               // Ignore old messages
+    if (Date.now() - event.origin_server_ts > 60000) return true;                                               // Ignore old messages
     if (event.content["m.relates_to"]?.["rel_type"] === "m.replace") return true;                               // Ignore edits
     if (CHATGPT_IGNORE_MEDIA && event.content.msgtype !== "m.text") return true;                                // Ignore everything which is not text if set
     return false;

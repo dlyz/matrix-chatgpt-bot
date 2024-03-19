@@ -1,4 +1,3 @@
-import ChatGPTClient from '@waylaidwanderer/chatgpt-api';
 import Markdown from 'markdown-it';
 import { MatrixClient } from "matrix-bot-sdk";
 import { MessageEvent, StoredConversation } from "./interfaces.js";
@@ -76,14 +75,14 @@ export async function sendReply(client: MatrixClient, roomId: string, rootEventI
   await client.sendEvent(roomId, "m.room.message", finalContent);
 }
 
-export async function sendChatGPTMessage(chatgpt: ChatGPTClient, question: string, storedConversation: StoredConversation) {
+export function sendChatGPTMessage(chatgpt: ChatGPTClient, question: string, storedConversation: StoredConversation) {
   // TODO: CHATGPT_TIMEOUT
   return (storedConversation !== undefined) ?
-    await chatgpt.sendMessage(question, { conversationId: storedConversation.conversationId, parentMessageId: storedConversation.messageId }) :
-    await chatgpt.sendMessage(question);
+    chatgpt.sendMessage(question, { conversationId: storedConversation.conversationId, parentMessageId: storedConversation.messageId }) :
+    chatgpt.sendMessage(question);
 }
 
-export function wrapPrompt(wrapped: string) {
-  const currentDateString = new Date().toLocaleDateString('en-us', { year: 'numeric', month: 'long', day: 'numeric' },);
-  return `<|im_sep|>${wrapped}\nCurrent date: ${currentDateString}<|im_sep|>\n\n`
-}
+// export function wrapPrompt(wrapped: string) {
+//   const currentDateString = new Date().toLocaleDateString('en-us', { year: 'numeric', month: 'long', day: 'numeric' },);
+//   return `<|im_sep|>${wrapped}\nCurrent date: ${currentDateString}<|im_sep|>\n\n`
+// }

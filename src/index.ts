@@ -1,4 +1,3 @@
-import ChatGPTClient from '@waylaidwanderer/chatgpt-api';
 import Keyv from 'keyv'
 import { KeyvFile } from 'keyv-file';
 import {
@@ -11,11 +10,15 @@ import {
   DATA_PATH, KEYV_URL, OPENAI_AZURE, OPENAI_API_KEY, MATRIX_HOMESERVER_URL, MATRIX_ACCESS_TOKEN, MATRIX_AUTOJOIN,
   MATRIX_BOT_PASSWORD, MATRIX_BOT_USERNAME, MATRIX_ENCRYPTION, MATRIX_THREADS, CHATGPT_CONTEXT,
   CHATGPT_API_MODEL, KEYV_BOT_STORAGE, KEYV_BACKEND, CHATGPT_PROMPT_PREFIX, MATRIX_WELCOME,
-  CHATGPT_REVERSE_PROXY, CHATGPT_TEMPERATURE, CHATGPT_MAX_CONTEXT_TOKENS, CHATGPT_MAX_PROMPT_TOKENS
+  CHATGPT_REVERSE_PROXY, CHATGPT_TEMPERATURE, CHATGPT_MAX_CONTEXT_TOKENS, CHATGPT_MAX_PROMPT_TOKENS,
+  CHATGPT_MAX_RESPONSE_TOKENS
   } from './env.js'
 import CommandHandler from "./handlers.js"
 import { KeyvStorageProvider } from './storage.js'
-import { parseMatrixUsernamePretty, wrapPrompt } from './utils.js';
+import { parseMatrixUsernamePretty } from './utils.js';
+
+import OpenAI from 'openai';
+import { ChatClient, ChatClientOptions } from './ChatClient.js';
 
 LogService.setLogger(new RichConsoleLogger());
 // LogService.setLevel(LogLevel.DEBUG);  // Shows the Matrix sync loop details - not needed most of the time
@@ -57,20 +60,30 @@ async function main() {
     return;
   }
 
-  const clientOptions = {  // (Optional) Parameters as described in https://platform.openai.com/docs/api-reference/completions
-    modelOptions: {
-      model: CHATGPT_API_MODEL,  // The model is set to gpt-3.5-turbo by default
-      temperature: CHATGPT_TEMPERATURE,
-    },
-    promptPrefix: wrapPrompt(CHATGPT_PROMPT_PREFIX),
-    debug: false,
-    azure: OPENAI_AZURE,
-    reverseProxyUrl: CHATGPT_REVERSE_PROXY,
-    maxContextTokens: CHATGPT_MAX_CONTEXT_TOKENS,
-    maxPromptTokens: CHATGPT_MAX_PROMPT_TOKENS
+  const clientOptions: ChatClientOptions = {
+    modelId: CHATGPT_API_MODEL,
+    temperature: CHATGPT_TEMPERATURE,
+    systemMessage: CHATGPT_PROMPT_PREFIX || null,
+    // debug: false,
+    // azure: OPENAI_AZURE,
+    // maxContextTokens: CHATGPT_MAX_CONTEXT_TOKENS,
+    maxInputTokens: CHATGPT_MAX_PROMPT_TOKENS,
+    maxOutputTokens: CHATGPT_MAX_RESPONSE_TOKENS,
   };
 
-  const chatgpt = new ChatGPTClient(OPENAI_API_KEY, clientOptions, cacheOptions);
+
+  let baseUrl = CHATGPT_REVERSE_PROXY;
+  const chatCompletionsSuffix = '/v1/chat/completions';
+  if (baseUrl && baseUrl.endsWith(chatCompletionsSuffix)) {
+    baseUrl = baseUrl.substring(0, baseUrl.length - chatCompletionsSuffix.length)
+  }
+
+  const openai = new OpenAI({
+    apiKey: OPENAI_API_KEY,
+    baseURL: baseUrl
+  });
+
+  const chatgpt = new ChatClient(openai, clientOptions, cacheOptions);
 
   // Automatically join rooms the bot is invited to
   if (MATRIX_AUTOJOIN) AutojoinRoomsMixin.setupOnClient(client);
@@ -101,7 +114,7 @@ async function main() {
   await commands.start();
 
   LogService.info("index", `Starting bot using ChatGPT model: ${CHATGPT_API_MODEL}`);
-  LogService.info("index", `Using promptPrefix: ${wrapPrompt(CHATGPT_PROMPT_PREFIX)}`)
+  LogService.info("index", `Using system message: ${CHATGPT_PROMPT_PREFIX}`)
   await client.start()
   LogService.info("index", "Bot started!");
 }
