@@ -3,7 +3,7 @@ import { KeyvFile } from 'keyv-file';
 import * as sha512 from "hash.js/lib/hash/sha/512.js";
 import * as path from "path";
 import { IAppserviceStorageProvider, IFilterInfo, IStorageProvider } from "matrix-bot-sdk";
-import { DATA_PATH, KEYV_BACKEND, KEYV_URL } from './env.js';
+import { botConfig } from './env.js';
 
 /**
  * A storage provider that uses the disk to store information.
@@ -13,16 +13,16 @@ export class KeyvStorageProvider implements IStorageProvider, IAppserviceStorage
 
     private completedTransactions = [];
     private db: Keyv;
-    
+
     /**
      * Creates a new simple file system storage provider.
      * @param {Keyv} keyvStore A Keyv instance for storing data.
      */
     constructor(namespace: string, private trackTransactionsInMemory = true, private maxInMemoryTransactions = 20) {
-        if (KEYV_BACKEND === 'file'){
-            this.db = new Keyv({store: new KeyvFile({ filename: path.join(DATA_PATH, `${namespace}.json`),})})
+        if (botConfig.KEYV_BACKEND === 'file'){
+            this.db = new Keyv({store: new KeyvFile({ filename: path.join(botConfig.DATA_PATH, `${namespace}.json`),})})
         } else {
-            this.db = new Keyv(KEYV_URL, { namespace: namespace });
+            this.db = new Keyv(botConfig.KEYV_URL, { namespace: namespace });
         }
         this.db.set('syncToken', null)
         this.db.set('filter', null)

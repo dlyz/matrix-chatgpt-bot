@@ -1,6 +1,6 @@
 import Keyv from "keyv";
 import OpenAI from "openai";
-import type { ChatCompletionMessageParam, ChatCompletionRole } from "openai/resources/chat/completions";
+import type { ChatCompletionCreateParamsBase, ChatCompletionMessageParam, ChatCompletionRole } from "openai/resources/chat/completions";
 import crypto from 'crypto';
 import { Tiktoken, encoding_for_model } from "tiktoken";
 
@@ -11,6 +11,10 @@ export interface ChatClientOptions {
 	systemMessage?: string,
 	maxInputTokens?: number,
 	maxOutputTokens?: number,
+	firstChunkSize?: number,
+
+	// workaround for Element bug that does not autoupdate message after the first edit.
+	useTwoChunksForFirstReply?: boolean,
 }
 
 
@@ -24,6 +28,18 @@ interface ConversationMessage {
 interface Conversation {
 	messages: Array<ConversationMessage>,
 	createdAt: number,
+}
+
+export interface ChatClientResult {
+	response: string,
+	conversationId: string,
+	messageId: string,
+	isLastChunk?: boolean,
+}
+
+export interface ConversationRef {
+	conversationId?: string,
+	parentMessageId?: string,
 }
 
 export class ChatClient {
@@ -41,11 +57,12 @@ export class ChatClient {
 		this.tokenEncoding = encoding_for_model(options.modelId as any);
 	}
 
-	async sendMessage(
-		newMessage: string,
-		conversationRef?: { conversationId?: string, parentMessageId?: string }
-	): Promise<{ response: string, conversationId: string, messageId: string }> {
 
+	private async prepareRequest(
+		newMessage: string,
+		conversationRef?: ConversationRef
+	) {
+		// common code for streaming and non-streaming
 
 		const conversationId = conversationRef?.conversationId || crypto.randomUUID();
 		const parentMessageId = conversationRef?.parentMessageId || crypto.randomUUID();
@@ -93,11 +110,32 @@ export class ChatClient {
 			})
 		}
 
-		const oaiCompletion = await this.openAiClient.chat.completions.create({
+		const requestParams: ChatCompletionCreateParamsBase = {
 			model: this.options.modelId,
 			temperature: this.options.temperature,
 			messages: oaiHistory,
 			max_tokens: this.options.maxOutputTokens,
+		};
+
+		return {
+			requestParams,
+			isNewConversation,
+			userMessage,
+			conversationId,
+			conversation
+		}
+	}
+
+
+	async sendMessage(
+		newMessage: string,
+		conversationRef?: ConversationRef
+	): Promise<ChatClientResult> {
+
+		const { requestParams, userMessage, conversationId, conversation } = await this.prepareRequest(newMessage, conversationRef);
+
+		const oaiCompletion = await this.openAiClient.chat.completions.create({
+			...requestParams,
 			stream: false,
 		});
 
@@ -107,7 +145,7 @@ export class ChatClient {
             id: crypto.randomUUID(),
             parentMessageId: userMessage.id,
             role: oaiReplyMessage.role,
-            message: oaiReplyMessage.content?.trim() || "",
+            message: oaiReplyMessage.content || "",
         };
 
         conversation.messages.push(replyMessage);
@@ -119,6 +157,61 @@ export class ChatClient {
             conversationId,
             messageId: replyMessage.id,
         };
+	}
+
+
+	async * sendMessageStreamed(
+		newMessage: string,
+		conversationRef?: { conversationId?: string, parentMessageId?: string }
+	): AsyncIterableIterator<ChatClientResult> {
+
+		const { requestParams, userMessage, conversationId, conversation, isNewConversation } = await this.prepareRequest(newMessage, conversationRef);
+
+		const oaiCompletionStream = await this.openAiClient.chat.completions.create({
+			...requestParams,
+			stream: true,
+		});
+
+		let maxBufferLength = Math.max(128, this.options.firstChunkSize || 512);
+		let buffer = "";
+
+		let replyMessage: ConversationMessage = {
+			id: crypto.randomUUID(),
+			parentMessageId: userMessage.id,
+			role: "assistant",
+			message: "",
+		};
+
+		conversation.messages.push(replyMessage);
+
+		for await (const oaiCompletion of oaiCompletionStream) {
+			const oaiReplyChunk = oaiCompletion.choices[0];
+			const oaiReplyMessage = oaiReplyChunk.delta;
+			if (oaiReplyMessage.role) {
+				replyMessage.role = oaiReplyMessage.role;
+			}
+
+			const isLastChunk = oaiReplyChunk.finish_reason != null;
+			buffer += oaiReplyMessage.content || "";
+			if ((buffer.length >= maxBufferLength) || isLastChunk) {
+				replyMessage.message += buffer;
+				buffer = "";
+				maxBufferLength = Math.round(maxBufferLength * 1.618);
+
+				if (isNewConversation && this.options.useTwoChunksForFirstReply) {
+					maxBufferLength = Number.MAX_SAFE_INTEGER;
+				}
+
+				yield {
+					response: replyMessage.message,
+					conversationId,
+					messageId: replyMessage.id,
+					isLastChunk,
+				};
+			}
+		}
+
+		await this.conversationsCache.set(conversationId, conversation);
 	}
 
 	private constraintInput<T extends ChatCompletionMessageParam>(fullHistory: T[], maxInputTokens?: number) {

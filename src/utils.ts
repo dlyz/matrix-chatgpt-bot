@@ -1,7 +1,6 @@
 import Markdown from 'markdown-it';
-import { MatrixClient } from "matrix-bot-sdk";
-import { MessageEvent, StoredConversation } from "./interfaces.js";
-import { CHATGPT_TIMEOUT } from "./env.js";
+import { LogService, MatrixClient, MatrixError } from "matrix-bot-sdk";
+import { MessageEvent } from "./interfaces.js";
 
 const md = Markdown();
 
@@ -30,59 +29,86 @@ export async function sendError(client: MatrixClient, text: string, roomId: stri
  * @param {boolean} thread reply as a thread
  * @param {boolean} rich should the plain text be rendered to html using markdown?
  */
-export async function sendReply(client: MatrixClient, roomId: string, rootEventId: string, text: string, thread: boolean = false, rich:boolean = false): Promise<void> {
+export async function sendReply({client, roomId, rootEventId, text, rich, editingEventId}: {
+  client: MatrixClient,
+  roomId: string,
+  rootEventId?: string,
+  editingEventId?: string
+  text: string,
+  rich: boolean
+}): Promise<string> {
 
-  const contentCommon = {
+  const content = {
     body: text,
     msgtype: "m.text",
   }
 
-  const contentThreadOnly = {
-    "m.relates_to": {
-      event_id: rootEventId,
-      is_falling_back: true,
-      "m.in_reply_to": {
-        "event_id": rootEventId
-      },
-      rel_type: "m.thread"
+  if (rich) {
+    const renderedText = md.render(text)
+    Object.assign(content, {
+      format: "org.matrix.custom.html",
+      formatted_body: renderedText,
+      "org.matrix.msc1767.message": [
+        {
+          "body": text,
+          "mimetype": "text/plain"
+        },
+        {
+          "body": renderedText,
+          "mimetype": "text/html"
+        }
+      ]
+    })
+
+  } else {
+    Object.assign(content, {
+      "org.matrix.msc1767.text": text,
+    })
+  }
+
+  if (editingEventId) {
+
+    Object.assign(content, {
+      "m.new_content": JSON.parse(JSON.stringify(content)),
+      "m.relates_to": {
+        "rel_type": "m.replace",
+        "event_id": editingEventId,
+        is_falling_back: true,
+      }
+    })
+
+  } else if (rootEventId) {
+    Object.assign(content, {
+      "m.relates_to": {
+        rel_type: "m.thread",
+        event_id: rootEventId,
+        is_falling_back: true,
+        "m.in_reply_to": {
+          "event_id": rootEventId
+        },
+      }
+    })
+
+  }
+
+
+  // todo: retries to all client methods. or move to official sdk client
+  try {
+    return await client.sendEvent(roomId, "m.room.message", content);
+  } catch (e) {
+    if (e instanceof MatrixError && e.errcode === 'M_LIMIT_EXCEEDED' && e.retryAfterMs) {
+      LogService.warn(`Matrix sendEvent error: ${e.errcode} ${e.error}, retry after: ${e.retryAfterMs}ms`);
+      await delay(Math.min(e.retryAfterMs, 10*1000));
+      return await client.sendEvent(roomId, "m.room.message", content);
+    } else {
+      throw e;
     }
   }
-
-  const contentTextOnly = {
-    "org.matrix.msc1767.text": text,
-  }
-
-  const renderedText = md.render(text)
-
-  const contentRichOnly = {
-    format: "org.matrix.custom.html",
-    formatted_body: renderedText,
-    "org.matrix.msc1767.message": [
-      {
-        "body": text,
-        "mimetype": "text/plain"
-      },
-      {
-        "body": renderedText,
-        "mimetype": "text/html"
-      }
-    ]
-  }
-
-  const content = rich ? { ...contentCommon, ...contentRichOnly } : { ...contentCommon, ...contentTextOnly };
-  const finalContent = thread ? { ...content, ...contentThreadOnly } : content
-
-  await client.sendEvent(roomId, "m.room.message", finalContent);
 }
 
-export function sendChatGPTMessage(chatgpt: ChatGPTClient, question: string, storedConversation: StoredConversation) {
-  // TODO: CHATGPT_TIMEOUT
-  return (storedConversation !== undefined) ?
-    chatgpt.sendMessage(question, { conversationId: storedConversation.conversationId, parentMessageId: storedConversation.messageId }) :
-    chatgpt.sendMessage(question);
-}
 
-// export function wrapPrompt(wrapped: string) {
-//   const currentDateString = new Date().toLocaleDateString('en-us', { year: 'numeric', month: 'long', day: 'numeric' },);
-//   return `<|im_sep|>${wrapped}\nCurrent date: ${currentDateString}<|im_sep|>\n\n`
-// }
+export function delay(milliseconds: number): Promise<void> {
+		return new Promise((resolve) => {
+			setTimeout(resolve, milliseconds);
+		});
+}
