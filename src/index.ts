@@ -31,15 +31,17 @@ if (botConfig.KEYV_BOT_STORAGE) {
 let cryptoStore: ICryptoStorageProvider;
 if (botConfig.MATRIX_ENCRYPTION) cryptoStore = new RustSdkCryptoStorageProvider(path.join(botConfig.DATA_PATH, "encrypted")); // /storage/encrypted
 
-let cacheOptions  // Options for the Keyv cache, see https://www.npmjs.com/package/keyv
+let cacheOptions: Keyv.Options<any>;  // Options for the Keyv cache, see https://www.npmjs.com/package/keyv
 if (botConfig.KEYV_BACKEND === 'file'){
   cacheOptions = { store: new KeyvFile({ filename: path.join(botConfig.DATA_PATH, `chatgpt-bot-api.json`) })  };
-} else { cacheOptions = { uri: botConfig.KEYV_URL } }
+} else {
+  cacheOptions = { uri: botConfig.KEYV_URL }
+}
 
 async function main() {
   if (!botConfig.MATRIX_ACCESS_TOKEN){
-    const botUsernameWithoutDomain = parseMatrixUsernamePretty(botConfig.MATRIX_BOT_USERNAME);
-    const authedClient = await (new MatrixAuth(botConfig.MATRIX_HOMESERVER_URL)).passwordLogin(botUsernameWithoutDomain, botConfig.MATRIX_BOT_PASSWORD);
+    const botUsernameWithoutDomain = parseMatrixUsernamePretty(botConfig.MATRIX_BOT_USERNAME || "");
+    const authedClient = await (new MatrixAuth(botConfig.MATRIX_HOMESERVER_URL)).passwordLogin(botUsernameWithoutDomain, botConfig.MATRIX_BOT_PASSWORD || "");
     console.log(authedClient.homeserverUrl + " token: \n" + authedClient.accessToken)
     console.log("Set MATRIX_ACCESS_TOKEN to above token, MATRIX_BOT_PASSWORD can now be blank")
     return;
@@ -57,7 +59,7 @@ async function main() {
   const clientOptions: ChatClientOptions = {
     modelId: botConfig.CHATGPT_API_MODEL,
     temperature: botConfig.CHATGPT_TEMPERATURE,
-    systemMessage: botConfig.CHATGPT_PROMPT_PREFIX || null,
+    systemMessage: botConfig.CHATGPT_PROMPT_PREFIX,
     // debug: false,
     // azure: OPENAI_AZURE,
     // maxContextTokens: CHATGPT_MAX_CONTEXT_TOKENS,

@@ -1,15 +1,23 @@
-import { LogService, MatrixClient, UserID } from "matrix-bot-sdk";
+import { LogService, MatrixClient, MessageEvent, UserID } from "matrix-bot-sdk";
 import { botConfig } from "./env.js";
-import { RelatesTo, MessageEvent, StoredConversation, StoredConversationConfig } from "./interfaces.js";
 import { sendError, sendReply } from "./utils.js";
 import { ChatClient } from "./ChatClient.js";
+import { IEventRelation, ImageMessageContent, MessageContent, MsgType, TextMessageContent } from "./matrixTypes.js";
+
+function isThread(relatesTo: IEventRelation | undefined): relatesTo is IEventRelation {
+  return !!relatesTo && relatesTo.rel_type === "m.thread";
+}
+
+function getThreadRootEventId(relatesTo: IEventRelation | undefined) {
+  return isThread(relatesTo) ? relatesTo.event_id : undefined
+}
 
 export default class CommandHandler {
 
   // Variables so we can cache the bot's display name and ID for command matching later.
-  private displayName: string;
-  private userId: string;
-  private localpart: string;
+  private displayName: string | undefined;
+  private userId: string = undefined!;
+  private localpart: string = undefined!;
 
   constructor(private client: MatrixClient, private chatGPT: ChatClient) { }
 
@@ -29,181 +37,270 @@ export default class CommandHandler {
     }
   }
 
-  private shouldIgnore(event: MessageEvent, roomId: string): boolean {
-    if (event.sender === this.userId) return true;                                                              // Ignore ourselves
-    if (botConfig.MATRIX_BLACKLIST && botConfig.MATRIX_BLACKLIST.split(" ").find(b => event.sender.endsWith(b))) return true;      // Ignore if on blacklist if set
-    if (botConfig.MATRIX_WHITELIST && !botConfig.MATRIX_WHITELIST.split(" ").find(w => event.sender.endsWith(w))) return true;      // Ignore if not on whitelist if set
-    if (botConfig.MATRIX_ROOM_BLACKLIST && botConfig.MATRIX_ROOM_BLACKLIST.split(" ").find(b => roomId.endsWith(b))) return true;  // Ignore if on room blacklist if set
-    if (botConfig.MATRIX_ROOM_WHITELIST && !botConfig.MATRIX_ROOM_WHITELIST.split(" ").find(w => roomId.endsWith(w))) return true;  // Ignore if not on room whitelist if set
-    if (Date.now() - event.origin_server_ts > 60000) return true;                                               // Ignore old messages
-    if (event.content["m.relates_to"]?.["rel_type"] === "m.replace") return true;                               // Ignore edits
-    if (botConfig.CHATGPT_IGNORE_MEDIA && event.content.msgtype !== "m.text") return true;                                // Ignore everything which is not text if set
-    return false;
+  private shouldProcess(event: MessageEvent<MessageContent>, roomId: string)
+    : event is MessageEvent<TextMessageContent> | MessageEvent<ImageMessageContent> {
+    // Ignore ourselves
+    if (event.sender === this.userId) return false;
+    // Ignore if on blacklist if set
+    if (botConfig.MATRIX_BLACKLIST && botConfig.MATRIX_BLACKLIST.split(" ").find(b => event.sender.endsWith(b))) return false;
+    // Ignore if not on whitelist if set
+    if (botConfig.MATRIX_WHITELIST && !botConfig.MATRIX_WHITELIST.split(" ").find(w => event.sender.endsWith(w))) return false;
+    // Ignore if on room blacklist if set
+    if (botConfig.MATRIX_ROOM_BLACKLIST && botConfig.MATRIX_ROOM_BLACKLIST.split(" ").find(b => roomId.endsWith(b))) return false;
+    // Ignore if not on room whitelist if set
+    if (botConfig.MATRIX_ROOM_WHITELIST && !botConfig.MATRIX_ROOM_WHITELIST.split(" ").find(w => roomId.endsWith(w))) return false;
+    // Ignore old messages
+    if (Date.now() - event.raw.origin_server_ts > 60000) return false;
+    // Ignore edits
+    if (event.content["m.relates_to"]?.["rel_type"] === "m.replace") return false;
+    // Ignore everything which is not text
+    if ((['m.text', 'm.image'] satisfies MsgType[] as string[]).indexOf(event.content.msgtype) === -1) return false;
+
+    return true;
   }
 
-  private getRootEventId(event: MessageEvent): string {
-    const relatesTo: RelatesTo | undefined = event.content["m.relates_to"];
-    const isReplyOrThread: boolean = (relatesTo === undefined)
-    return (!isReplyOrThread && relatesTo.event_id !== undefined) ? relatesTo.event_id : event.event_id;
+
+  private getRootEventId(event: MessageEvent<MessageContent>): string {
+    return getThreadRootEventId(event.content["m.relates_to"]) ?? event.eventId;
   }
 
-  private getStorageKey(event: MessageEvent, roomId: string): string {
+  private getStorageKey(event: MessageEvent<MessageContent>, roomId: string): string {
     const rootEventId: string = this.getRootEventId(event)
     if (botConfig.CHATGPT_CONTEXT == "room") {
       return roomId
     } else if (botConfig.CHATGPT_CONTEXT == "thread") {
       return rootEventId
     } else {  // CHATGPT_CONTEXT set to both.
-      return (rootEventId !== event.event_id) ? rootEventId : roomId;
+      return (rootEventId !== event.eventId) ? rootEventId : roomId;
     }
   }
 
-  private async getStoredConversation(storageKey: string, roomId: string): Promise<StoredConversation> {
-    let storedValue: string = await this.client.storageProvider.readValue('gpt-' + storageKey)
-    if (storedValue == undefined && storageKey != roomId) storedValue = await this.client.storageProvider.readValue('gpt-' + roomId)
-    return (storedValue !== undefined) ? JSON.parse(storedValue) : undefined;
+  private async getStoredConversation(storageKey: string, roomId: string) {
+    // todo: get rid of two conversation stores
+    let storedValue = await this.client.storageProvider.readValue('gpt-' + storageKey)
+    if (storedValue == undefined && storageKey != roomId) {
+      storedValue = await this.client.storageProvider.readValue('gpt-' + roomId)
+    }
+
+    if (storedValue != undefined) {
+      const result: StoredConversation = JSON.parse(storedValue);
+
+      // fixing legacy configs
+      result.config = Object.assign(makeDefaultConversationConfig(), result.config ?? {});
+
+      return result;
+    } else {
+      return undefined;
+    }
   }
 
-  private getConfig(storedConversation: StoredConversation): StoredConversationConfig {
-    return (storedConversation !== undefined && storedConversation.config !== undefined) ? storedConversation.config : {};
+  private async saveStoredConversation(
+    storedConversation: StoredConversation,
+    storageKey: string,
+    roomId: string,
+    eventId: string
+  ) {
+    const convString = JSON.stringify(storedConversation);
+    await this.client.storageProvider.storeValue('gpt-' + storageKey, convString);
+    if ((storageKey === roomId) && (botConfig.CHATGPT_CONTEXT === "both")) {
+      await this.client.storageProvider.storeValue('gpt-' + eventId, convString);
+    }
   }
 
-  private async shouldBePrefixed(config: StoredConversationConfig, roomId: string, event: MessageEvent): Promise<boolean> {
-    const relatesTo: RelatesTo | undefined = event.content["m.relates_to"];
-    const isReplyOrThread: boolean = (relatesTo === undefined);
-    const isDm: boolean = this.client.dms.isDm(roomId);
-    const MATRIX_PREFIX: string = (config.MATRIX_PREFIX === undefined) ? botConfig.MATRIX_DEFAULT_PREFIX : config.MATRIX_PREFIX
-    const MATRIX_PREFIX_REPLY: boolean = (config.MATRIX_PREFIX_REPLY === undefined) ? botConfig.MATRIX_DEFAULT_PREFIX_REPLY : config.MATRIX_PREFIX_REPLY
-    let shouldBePrefixed: boolean = (MATRIX_PREFIX && isReplyOrThread) || (MATRIX_PREFIX_REPLY && !isReplyOrThread);
-    if (!botConfig.MATRIX_PREFIX_DM && isDm) shouldBePrefixed=false
-    const prefixes = [MATRIX_PREFIX, `${this.localpart}:`, `${this.displayName}:`, `${this.userId}:`];
-    if (!isReplyOrThread && !MATRIX_PREFIX_REPLY) {
-      if(relatesTo.event_id !== undefined){
-        const rootEvent: MessageEvent = await this.client.getEvent(roomId, relatesTo.event_id) // relatesTo is root event.
-        const rootPrefixUsed = prefixes.find(p => rootEvent.content.body.startsWith(p));
-        if (MATRIX_PREFIX && !rootPrefixUsed && !(!botConfig.MATRIX_PREFIX_DM && isDm)) return false;  // Ignore unrelated threads or certain dms
-      } else { // reply not thread, iterating for a prefix not implemented
-        return false;                                                       // Ignore if no relatesTo EventID
+  private async getBodyWithoutPrefix(
+    conversation: StoredConversation | undefined,
+    config: StoredConversationConfig,
+    roomId: string,
+    eventContent: MessageContent
+  ) {
+    const isDm = this.client.dms.isDm(roomId);
+
+    if (!config.MATRIX_PREFIX || (isDm && !config.MATRIX_PREFIX_DM)) {
+      // no prefix required
+      return eventContent.body;
+    }
+
+    const prefixes = [config.MATRIX_PREFIX, `${this.localpart}:`, `${this.displayName}:`, `${this.userId}:`];
+
+    function getAndStripPrefix(text: string) {
+      const prefix = prefixes.find(p => text.startsWith(p));
+      return prefix ? text.slice(prefix.length).trimStart() : undefined;
+    }
+
+    const threadEventId = getThreadRootEventId(eventContent["m.relates_to"]);
+    if (threadEventId) {
+      if (config.MATRIX_PREFIX_REPLY) {
+        return getAndStripPrefix(eventContent.body);
+      } else {
+        // if we already have a conversation, then we have already checked the root thread message
+        return conversation ? eventContent.body : undefined;
       }
+    } else {
+      return getAndStripPrefix(eventContent.body);
     }
-    const prefixUsed: string = prefixes.find(p => event.content.body.startsWith(p));
-    if (shouldBePrefixed && !prefixUsed) return false;                      // Ignore without prefix if prefixed
-    return true;
-  }
-
-  private async getBodyWithoutPrefix(event: MessageEvent, config: StoredConversationConfig, shouldBePrefixed: boolean): Promise<string> {
-    const MATRIX_PREFIX: string = (config.MATRIX_PREFIX === undefined) ? botConfig.MATRIX_DEFAULT_PREFIX : config.MATRIX_PREFIX
-    const prefixUsed: string = [MATRIX_PREFIX, `${this.localpart}:`, `${this.displayName}:`, `${this.userId}:`].find(p => event.content.body.startsWith(p));
-    const trimLength = (shouldBePrefixed && prefixUsed) ? prefixUsed.length : 0;
-    return event.content.body.slice(trimLength).trimStart();
   }
 
   /**
    * Run when `message` room event is received. The bot only sends a message if needed.
    * @returns Room event handler, which itself returns nothing
    */
-  private async onMessage(roomId: string, event: MessageEvent) {
+  private async onMessage(roomId: string, rawEvent: unknown) {
     try {
-      if (this.shouldIgnore(event, roomId)) return;
+      const event = new MessageEvent<MessageContent>(rawEvent);
+
+      if (!this.shouldProcess(event, roomId)) return;
+
 
       const storageKey = this.getStorageKey(event, roomId);
       const storedConversation = await this.getStoredConversation(storageKey, roomId);
-      const config = this.getConfig(storedConversation);
+      const conversationConfig = storedConversation?.config ?? makeDefaultConversationConfig();
+      const conversationRef = {
+        conversationId: storedConversation?.conversationId,
+        tailMessageId: storedConversation?.messageId
+      };
 
-      const shouldBePrefixed = await this.shouldBePrefixed(config, roomId, event)
-      if (!shouldBePrefixed) return;
+      const content = event.content;
 
-      await Promise.all([
-        this.client.sendReadReceipt(roomId, event.event_id),
-        this.client.setTyping(roomId, true, botConfig.CHATGPT_TIMEOUT)
-      ]);
-
-      const bodyWithoutPrefix = this.getBodyWithoutPrefix(event, config, shouldBePrefixed);
-      if (!bodyWithoutPrefix) {
-        await sendError(this.client, "Error with body: " + event.content.body, roomId, event.event_id);
+      const bodyWithoutPrefix = await this.getBodyWithoutPrefix(storedConversation, conversationConfig, roomId, content);
+      if (bodyWithoutPrefix === undefined) {
+        // ignored because the prefix required but absent or the body is undefined
         return;
       }
 
-      let result;
 
-      const streamed = botConfig.MATRIX_FIRST_CHUNK_SIZE > 0;
-      if (!streamed) {
-        try {
-          result = await this.chatGPT.sendMessage(await bodyWithoutPrefix, { conversationId: storedConversation?.conversationId, parentMessageId: storedConversation?.messageId })
-        }
-        catch (error) {
-          LogService.error(`OpenAI-API Error: ${error}`);
-          sendError(this.client, `The bot has encountered an error, please contact your administrator (Error code ${error.status || "Unknown"}).`, roomId, event.event_id);
+      let result;
+      if (content.msgtype === 'm.text') {
+
+        if (!bodyWithoutPrefix) {
+          await sendError(this.client, "Body is empty", roomId, event.eventId);
           return;
-        };
+        }
 
         await Promise.all([
-          this.client.setTyping(roomId, false, 500),
-          sendReply({
-            client: this.client,
-            roomId: roomId,
-            rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
-            text: result.response,
-            rich: botConfig.MATRIX_RICH_TEXT,
-          })
+          this.client.sendReadReceipt(roomId, event.eventId),
+          this.client.setTyping(roomId, true, botConfig.CHATGPT_TIMEOUT)
         ]);
 
-      } else {
+        const streamed = botConfig.MATRIX_FIRST_CHUNK_SIZE !== undefined && botConfig.MATRIX_FIRST_CHUNK_SIZE > 0;
+        if (!streamed) {
+          try {
+            result = await this.chatGPT.sendMessage(await bodyWithoutPrefix, conversationRef)
+          }
+          catch (error: any) {
+            LogService.error(`OpenAI-API Error: ${error}`);
+            sendError(this.client, `The bot has encountered an error, please contact your administrator (Error code ${error.status || "Unknown"}).`, roomId, event.eventId);
+            return;
+          };
 
-        let matrixError = false;
-        try {
-          const stream = this.chatGPT.sendMessageStreamed(await bodyWithoutPrefix, { conversationId: storedConversation?.conversationId, parentMessageId: storedConversation?.messageId })
-          let messageId = undefined;
+          await Promise.all([
+            this.client.setTyping(roomId, false, 500),
+            sendReply({
+              client: this.client,
+              roomId: roomId,
+              rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
+              text: result.response,
+              rich: botConfig.MATRIX_RICH_TEXT,
+            })
+          ]);
 
-          for await (let chunk of stream) {
+        } else {
 
-            result = {
-              conversationId: chunk.conversationId,
-              messageId: chunk.messageId,
-            }
+          let matrixError = false;
+          try {
+            const stream = this.chatGPT.sendMessageStreamed(bodyWithoutPrefix, conversationRef)
+            let messageId = undefined;
 
-            try
-            {
-              const resultingMessageId = await sendReply({
-                client: this.client,
-                roomId: roomId,
-                rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
-                editingEventId: messageId,
-                text: chunk.response + (chunk.isLastChunk ? '' : "\n\n*...generating...*"),
-                rich: botConfig.MATRIX_RICH_TEXT,
-              });
+            for await (let chunk of stream) {
 
-              messageId = messageId || resultingMessageId;
-
-              if (chunk.isLastChunk) {
-                await this.client.setTyping(roomId, false, 500)
-              } else {
-                await this.client.setTyping(roomId, true, botConfig.CHATGPT_TIMEOUT)
+              result = {
+                conversationId: chunk.conversationId,
+                messageId: chunk.messageId,
               }
 
-            } catch (e) {
-              matrixError = true;
-              throw e;
+              try {
+                const resultingMessageId = await sendReply({
+                  client: this.client,
+                  roomId: roomId,
+                  rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
+                  editingEventId: messageId,
+                  text: chunk.response + (chunk.isLastChunk ? '' : "\n\n*...generating...*"),
+                  rich: botConfig.MATRIX_RICH_TEXT,
+                });
+
+                messageId = messageId || resultingMessageId;
+
+                if (chunk.isLastChunk) {
+                  await this.client.setTyping(roomId, false, 500)
+                } else {
+                  await this.client.setTyping(roomId, true, botConfig.CHATGPT_TIMEOUT)
+                }
+
+              } catch (e) {
+                matrixError = true;
+                throw e;
+              }
+            }
+
+            if (!result) {
+              throw new Error("ChatGPT produced no chunks");
             }
           }
-        }
-        catch (error) {
-          if (matrixError) {
-            throw error;
-          }
+          catch (error: any) {
+            if (matrixError) {
+              throw error;
+            }
 
-          LogService.error(`OpenAI-API Error: ${error}`);
-          sendError(this.client, `The bot has encountered an error, please contact your administrator (Error code ${error.status || "Unknown"}).`, roomId, event.event_id);
-          return;
-        };
+            LogService.error(`OpenAI-API Error: ${error}`);
+            sendError(this.client, `The bot has encountered an error, please contact your administrator (Error code ${error.status || "Unknown"}).`, roomId, event.eventId);
+            return;
+          };
+        }
+
+      } else if (content.msgtype === 'm.image') {
+
+        const file = await this.client.crypto.decryptMedia(content.file);
+        const imageUrl = `data:${content.info?.mimetype ?? 'image/png'};base64,${file.toString('base64')}`;
+
+        result = await this.chatGPT.saveImage(imageUrl, conversationRef);
+
+        await this.client.sendReadReceipt(roomId, event.eventId);
+
+      } else {
+        return;
       }
 
-      const storedConfig = ((storedConversation !== undefined && storedConversation.config !== undefined) ? storedConversation.config : {})
-      const configString: string = JSON.stringify({conversationId: result.conversationId, messageId: result.messageId, config: storedConfig})
-      await this.client.storageProvider.storeValue('gpt-' + storageKey, configString);
-      if ((storageKey === roomId) && (botConfig.CHATGPT_CONTEXT === "both")) await this.client.storageProvider.storeValue('gpt-' + event.event_id, configString);
+      const newConversation: StoredConversation = {
+        conversationId: result.conversationId,
+        messageId: result.messageId,
+        config: conversationConfig
+      }
+
+      await this.saveStoredConversation(newConversation, storageKey, roomId, event.eventId);
+
     } catch (err) {
       console.error(err);
     }
+  }
+
+}
+
+type StoredConversationConfig = {
+  // TODO: think is this required to be saved in the conv. think about how branches are processed and stored
+  MATRIX_PREFIX: string;
+  MATRIX_PREFIX_REPLY: boolean;
+  MATRIX_PREFIX_DM: boolean;
+}
+
+type StoredConversation = {
+  conversationId: string;
+  messageId: string;
+  config: StoredConversationConfig;
+}
+
+function makeDefaultConversationConfig(): StoredConversationConfig {
+  return {
+    MATRIX_PREFIX: botConfig.MATRIX_DEFAULT_PREFIX,
+    MATRIX_PREFIX_REPLY: botConfig.MATRIX_DEFAULT_PREFIX_REPLY,
+    MATRIX_PREFIX_DM: botConfig.MATRIX_PREFIX_DM,
   }
 }

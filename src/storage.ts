@@ -1,9 +1,11 @@
 import Keyv from 'keyv'
 import { KeyvFile } from 'keyv-file';
-import * as sha512 from "hash.js/lib/hash/sha/512.js";
+import * as hash from "hash.js";
 import * as path from "path";
 import { IAppserviceStorageProvider, IFilterInfo, IStorageProvider } from "matrix-bot-sdk";
 import { botConfig } from './env.js';
+
+const sha512 = hash.sha512;
 
 /**
  * A storage provider that uses the disk to store information.
@@ -11,7 +13,7 @@ import { botConfig } from './env.js';
  */
 export class KeyvStorageProvider implements IStorageProvider, IAppserviceStorageProvider {
 
-    private completedTransactions = [];
+    private completedTransactions: string[] = [];
     private db: Keyv;
 
     /**
