@@ -298,7 +298,7 @@ export default class CommandHandler {
           roomId: roomId,
           rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
           editingEventId: messageId,
-          text: chunk.response + (chunk.isLastChunk ? '' : "\n\n*...generating...*"),
+          text: chunk.response + (chunk.isLastChunk ? '' : "\n\n" + botConfig.MATRIX_GENERATING_MESSAGE),
           rich: botConfig.MATRIX_RICH_TEXT,
         });
 

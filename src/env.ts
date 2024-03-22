@@ -21,6 +21,7 @@ export const botConfig = parseEnv(process.env, {
   MATRIX_THREADS:              { schema: z.boolean().default(true),                description: "Set to true if you want the bot to answer always in a new thread/conversation" },
   MATRIX_FIRST_CHUNK_SIZE:     { schema: z.number().optional(),                    description: "The size of the first flushed chunk (in chars) for each assistant response. If not set or 0, streaming will not be used." },
   MATRIX_USE_TWO_CHUNKS_FOR_FIRST_REPLY: { schema: z.boolean().default(false),     description: "Set true if your matrix client does not refreshes after the second edit of first thread answer (reproduces in Element 1.11.61)" },
+  MATRIX_GENERATING_MESSAGE:   { schema: z.string().default("*...generating...*"), description: "String that will appear in the end of the message that is still generating." },
   MATRIX_PREFIX_DM:            { schema: z.boolean().default(false),               description: "Set to false if you want the bot to answer to all messages in a one-to-one room" },
   MATRIX_RICH_TEXT:            { schema: z.boolean().default(true),                description: "Set to true if you want the bot to answer with enriched text" },
   MATRIX_WELCOME:              { schema: z.boolean().default(true),                description: "Set to true if you want the bot to post a message when it joins a new chat." },
