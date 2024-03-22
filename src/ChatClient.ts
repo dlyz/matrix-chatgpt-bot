@@ -35,16 +35,14 @@ interface Conversation {
 	createdAt: number,
 }
 
-export interface ChatClientResult {
+export interface ChatClientResult extends ConversationRef {
 	response: string,
-	conversationId: string,
-	messageId: string,
 	isLastChunk?: boolean,
 }
 
 export interface ConversationRef {
-	conversationId?: string,
-	tailMessageId?: string,
+	conversationId: string,
+	tailMessageId: string,
 }
 
 export class ChatClient {
@@ -62,7 +60,7 @@ export class ChatClient {
 		this.tokenEncoding = encoding_for_model(options.modelId as any);
 	}
 
-	private async getConversation(conversationRef: ConversationRef) {
+	private async getConversation(conversationRef: Partial<ConversationRef>) {
 
 		const conversationId = conversationRef.conversationId || crypto.randomUUID();
 		const tailMessageId = conversationRef.tailMessageId || crypto.randomUUID();
@@ -80,16 +78,16 @@ export class ChatClient {
 
 		return {
 			conversationId,
+			tailMessageId,
 			conversation,
 			isNewConversation,
-			tailMessageId
 		}
 	}
 
 	async saveImage(
 		imageUrl: string,
-		conversationRef: ConversationRef
-	) {
+		conversationRef: Partial<ConversationRef>
+	): Promise<ConversationRef> {
 		const { conversationId, conversation, tailMessageId } = await this.getConversation(conversationRef);
 
 		let userMessage: ConversationMessage = {
@@ -105,13 +103,13 @@ export class ChatClient {
 
 		return {
             conversationId,
-            messageId: userMessage.id,
+            tailMessageId: userMessage.id,
         };
 	}
 
 	private async prepareRequest(
 		newMessage: string,
-		conversationRef: ConversationRef
+		conversationRef: Partial<ConversationRef>
 	) {
 		// common code for streaming and non-streaming
 
@@ -161,7 +159,7 @@ export class ChatClient {
 
 	async sendMessage(
 		newMessage: string,
-		conversationRef: ConversationRef
+		conversationRef: Partial<ConversationRef>
 	): Promise<ChatClientResult> {
 
 		const {
@@ -192,14 +190,14 @@ export class ChatClient {
         return {
             response: replyMessage.message,
             conversationId,
-            messageId: replyMessage.id,
+            tailMessageId: replyMessage.id,
         };
 	}
 
 
 	async * sendMessageStreamed(
 		newMessage: string,
-		conversationRef: ConversationRef
+		conversationRef: Partial<ConversationRef>
 	): AsyncIterableIterator<ChatClientResult> {
 
 		const {
@@ -246,9 +244,9 @@ export class ChatClient {
 				}
 
 				yield {
-					response: replyMessage.message,
 					conversationId,
-					messageId: replyMessage.id,
+					tailMessageId: replyMessage.id,
+					response: replyMessage.message,
 					isLastChunk,
 				};
 			}

@@ -1,8 +1,9 @@
 import { LogService, MatrixClient, MessageEvent, UserID } from "matrix-bot-sdk";
 import { botConfig } from "./env.js";
 import { sendError, sendReply } from "./utils.js";
-import { ChatClient } from "./ChatClient.js";
-import { IEventRelation, ImageMessageContent, MessageContent, MsgType, TextMessageContent } from "./matrixTypes.js";
+import { ChatClient, ConversationRef } from "./ChatClient.js";
+import { IEvent, IEventRelation, ImageMessageContent, MessageContent, MsgType, TextMessageContent } from "./matrixTypes.js";
+import { BadRequestError, OpenAIError } from "openai";
 
 function isThread(relatesTo: IEventRelation | undefined): relatesTo is IEventRelation {
   return !!relatesTo && relatesTo.rel_type === "m.thread";
@@ -144,7 +145,7 @@ export default class CommandHandler {
    * Run when `message` room event is received. The bot only sends a message if needed.
    * @returns Room event handler, which itself returns nothing
    */
-  private async onMessage(roomId: string, rawEvent: unknown) {
+  private async onMessage(roomId: string, rawEvent: IEvent) {
     try {
       const event = new MessageEvent<MessageContent>(rawEvent);
 
@@ -154,19 +155,18 @@ export default class CommandHandler {
       const storageKey = this.getStorageKey(event, roomId);
       const storedConversation = await this.getStoredConversation(storageKey, roomId);
       const conversationConfig = storedConversation?.config ?? makeDefaultConversationConfig();
-      const conversationRef = {
+      let conversationRef = {
         conversationId: storedConversation?.conversationId,
         tailMessageId: storedConversation?.messageId
       };
 
       const content = event.content;
 
-      const bodyWithoutPrefix = await this.getBodyWithoutPrefix(storedConversation, conversationConfig, roomId, content);
+      let bodyWithoutPrefix = await this.getBodyWithoutPrefix(storedConversation, conversationConfig, roomId, content);
       if (bodyWithoutPrefix === undefined) {
         // ignored because the prefix required but absent or the body is undefined
         return;
       }
-
 
       let result;
       if (content.msgtype === 'm.text') {
@@ -176,84 +176,39 @@ export default class CommandHandler {
           return;
         }
 
-        await Promise.all([
-          this.client.sendReadReceipt(roomId, event.eventId),
-          this.client.setTyping(roomId, true, botConfig.CHATGPT_TIMEOUT)
-        ]);
+        const imgUrlPrefix = "!img ";
+        if (bodyWithoutPrefix.startsWith(imgUrlPrefix)) {
 
-        const streamed = botConfig.MATRIX_FIRST_CHUNK_SIZE !== undefined && botConfig.MATRIX_FIRST_CHUNK_SIZE > 0;
-        if (!streamed) {
-          try {
-            result = await this.chatGPT.sendMessage(await bodyWithoutPrefix, conversationRef)
+          const bodyWithImageUrl = bodyWithoutPrefix.substring(imgUrlPrefix.length);
+          const newLineIndex = bodyWithImageUrl.indexOf('\n');
+          let imageUrl;
+          if (newLineIndex !== -1) {
+            imageUrl = bodyWithImageUrl.substring(0, newLineIndex).trim();
+            bodyWithoutPrefix = bodyWithImageUrl.substring(newLineIndex).trimStart();
+          } else {
+            imageUrl = bodyWithImageUrl.trim();
+            bodyWithoutPrefix = '';
           }
-          catch (error: any) {
-            LogService.error(`OpenAI-API Error: ${error}`);
-            sendError(this.client, `The bot has encountered an error, please contact your administrator (Error code ${error.status || "Unknown"}).`, roomId, event.eventId);
-            return;
-          };
 
-          await Promise.all([
-            this.client.setTyping(roomId, false, 500),
-            sendReply({
-              client: this.client,
-              roomId: roomId,
-              rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
-              text: result.response,
-              rich: botConfig.MATRIX_RICH_TEXT,
-            })
-          ]);
+          try {
+            new URL(imageUrl)
+          } catch (error) {
+            await sendError(this.client, `Image URL is invalid: ${imageUrl}`, roomId, event.eventId);
+            return;
+          }
+
+          result = await this.chatGPT.saveImage(imageUrl, conversationRef);
+
+          if (bodyWithoutPrefix) {
+            result = await this.processText({ bodyWithoutPrefix, conversationRef: result, roomId, event });
+          } else {
+            await this.client.sendReadReceipt(roomId, event.eventId);
+          }
 
         } else {
 
-          let matrixError = false;
-          try {
-            const stream = this.chatGPT.sendMessageStreamed(bodyWithoutPrefix, conversationRef)
-            let messageId = undefined;
+          result = await this.processText({ bodyWithoutPrefix, conversationRef, roomId, event });
 
-            for await (let chunk of stream) {
-
-              result = {
-                conversationId: chunk.conversationId,
-                messageId: chunk.messageId,
-              }
-
-              try {
-                const resultingMessageId = await sendReply({
-                  client: this.client,
-                  roomId: roomId,
-                  rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
-                  editingEventId: messageId,
-                  text: chunk.response + (chunk.isLastChunk ? '' : "\n\n*...generating...*"),
-                  rich: botConfig.MATRIX_RICH_TEXT,
-                });
-
-                messageId = messageId || resultingMessageId;
-
-                if (chunk.isLastChunk) {
-                  await this.client.setTyping(roomId, false, 500)
-                } else {
-                  await this.client.setTyping(roomId, true, botConfig.CHATGPT_TIMEOUT)
-                }
-
-              } catch (e) {
-                matrixError = true;
-                throw e;
-              }
-            }
-
-            if (!result) {
-              throw new Error("ChatGPT produced no chunks");
-            }
-          }
-          catch (error: any) {
-            if (matrixError) {
-              throw error;
-            }
-
-            LogService.error(`OpenAI-API Error: ${error}`);
-            sendError(this.client, `The bot has encountered an error, please contact your administrator (Error code ${error.status || "Unknown"}).`, roomId, event.eventId);
-            return;
-          };
         }
 
       } else if (content.msgtype === 'm.image') {
@@ -262,7 +217,6 @@ export default class CommandHandler {
         const imageUrl = `data:${content.info?.mimetype ?? 'image/png'};base64,${file.toString('base64')}`;
 
         result = await this.chatGPT.saveImage(imageUrl, conversationRef);
-
         await this.client.sendReadReceipt(roomId, event.eventId);
 
       } else {
@@ -271,17 +225,100 @@ export default class CommandHandler {
 
       const newConversation: StoredConversation = {
         conversationId: result.conversationId,
-        messageId: result.messageId,
+        messageId: result.tailMessageId,
         config: conversationConfig
       }
 
       await this.saveStoredConversation(newConversation, storageKey, roomId, event.eventId);
 
     } catch (err) {
-      console.error(err);
+
+      LogService.error('Bot', err);
+      if (err instanceof OpenAIError) {
+        try {
+          sendError(
+            this.client,
+            `The bot has encountered an error, please contact your administrator (Error code ${(err as any).status || "Unknown"}).`,
+            roomId,
+            rawEvent.event_id
+          );
+        } catch (matrixError) {
+          BadRequestError
+          LogService.error('Bot', matrixError);
+        }
+      }
     }
   }
 
+
+  private async processText({bodyWithoutPrefix, conversationRef, roomId, event, }: {
+    bodyWithoutPrefix: string,
+    conversationRef: Partial<ConversationRef>,
+    roomId: string,
+    event: MessageEvent<MessageContent>,
+  }) {
+
+    await Promise.all([
+      this.client.sendReadReceipt(roomId, event.eventId),
+      this.client.setTyping(roomId, true, botConfig.CHATGPT_TIMEOUT)
+    ]);
+
+    const streamed = botConfig.MATRIX_FIRST_CHUNK_SIZE !== undefined && botConfig.MATRIX_FIRST_CHUNK_SIZE > 0;
+    if (!streamed) {
+      const result = await this.chatGPT.sendMessage(bodyWithoutPrefix, conversationRef);
+
+      await Promise.all([
+        this.client.setTyping(roomId, false, 500),
+        sendReply({
+          client: this.client,
+          roomId: roomId,
+          rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
+          text: result.response,
+          rich: botConfig.MATRIX_RICH_TEXT,
+        })
+      ]);
+
+      return result;
+
+    } else {
+
+      const stream = this.chatGPT.sendMessageStreamed(bodyWithoutPrefix, conversationRef)
+      let messageId = undefined;
+
+      let result;
+      for await (let chunk of stream) {
+
+        result = {
+          conversationId: chunk.conversationId,
+          tailMessageId: chunk.tailMessageId,
+        } satisfies ConversationRef;
+
+        const resultingMessageId = await sendReply({
+          client: this.client,
+          roomId: roomId,
+          rootEventId: botConfig.MATRIX_THREADS ? this.getRootEventId(event) : undefined,
+          editingEventId: messageId,
+          text: chunk.response + (chunk.isLastChunk ? '' : "\n\n*...generating...*"),
+          rich: botConfig.MATRIX_RICH_TEXT,
+        });
+
+        messageId = messageId || resultingMessageId;
+
+        if (chunk.isLastChunk) {
+          await this.client.setTyping(roomId, false, 500)
+        } else {
+          await this.client.setTyping(roomId, true, botConfig.CHATGPT_TIMEOUT)
+        }
+
+      }
+
+      if (!result) {
+        throw new OpenAIError("ChatGPT produced no chunks");
+      }
+
+      return result;
+    }
+  }
 }
 
 type StoredConversationConfig = {
