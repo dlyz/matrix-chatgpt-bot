@@ -26,7 +26,9 @@ export class KeyvStorageProvider implements IStorageProvider, IAppserviceStorage
         } else {
             this.db = new Keyv(botConfig.KEYV_URL, { namespace: namespace });
         }
-        this.db.set('syncToken', null)
+
+        // why it was here in the first place? todo: think about other fields.
+        //this.db.set('syncToken', null)
         this.db.set('filter', null)
         this.db.set('appserviceUsers', {}) // userIdHash => { data }
         this.db.set('appserviceTransactions', {}) // txnIdHash => { data }

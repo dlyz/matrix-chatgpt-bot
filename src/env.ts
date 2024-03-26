@@ -3,7 +3,7 @@ import { z } from "zod";
 import * as dotenv from 'dotenv';
 import dotenvExpand from 'dotenv-expand';
 
-dotenvExpand.expand(dotenv.config());
+dotenvExpand.expand(dotenv.config({ override: true }));
 
 export const botConfig = parseEnv(process.env, {
   DATA_PATH:                   { schema: z.string().default("./storage"),          description: "Set to /storage/ if using docker, ./storage if running without" },

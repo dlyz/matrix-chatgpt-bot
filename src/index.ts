@@ -73,7 +73,7 @@ async function main() {
   let baseUrl = botConfig.CHATGPT_REVERSE_PROXY;
   const chatCompletionsSuffix = '/v1/chat/completions';
   if (baseUrl && baseUrl.endsWith(chatCompletionsSuffix)) {
-    baseUrl = baseUrl.substring(0, baseUrl.length - chatCompletionsSuffix.length)
+    baseUrl = baseUrl.substring(0, baseUrl.length - chatCompletionsSuffix.length) + 'v1/'
   }
 
   const openai = new OpenAI({
@@ -87,8 +87,18 @@ async function main() {
   if (botConfig.MATRIX_AUTOJOIN) AutojoinRoomsMixin.setupOnClient(client);
 
   client.on("room.failed_decryption", async (roomId, event, error) => {
-    // handle `m.room.encrypted` event that could not be decrypted
-    LogService.error("index", `Failed decryption event!\n${{ roomId, event, error }}`);
+
+    // todo: shortly after start sync this will be called for every failed room message if the keys has been reset.
+    // the caller will not wait for the callback to complete, so ideally we have to implement producer-consumer here.
+    // also we should not send text to the room with multiple decryption event errors.
+    // for now we just ignore too old events and relying on their small count.
+
+    if (Date.now() - event.origin_server_ts > 60000) {
+      return;
+    }
+
+    LogService.warn(`Leaving room ${roomId} due to decryption error.`);
+
     await client.sendText(roomId, `Room key error. I will leave the room, please reinvite me!`);
     try {
       await client.leaveRoom(roomId);
