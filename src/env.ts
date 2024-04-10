@@ -45,4 +45,5 @@ export const botConfig = parseEnv(process.env, {
   CHATGPT_MAX_CONTEXT_TOKENS:  { schema: z.number().default(4097), description: "Davinci models have a max context length of 4097 tokens, but you may need to change this for other models." },
   CHATGPT_MAX_PROMPT_TOKENS:   { schema: z.number().default(3097), description: "You might want to lower this to save money if using a paid model. Earlier messages will be dropped until the prompt is within the limit." },
   CHATGPT_MAX_RESPONSE_TOKENS: { schema: z.number().default(2048), description: "You might want to lower this to save money if using a paid model." },
+  CHATGPT_ENABLE_VISION:       { schema: z.boolean().default(true), description: "Set to false to disable accepting images." },
 });

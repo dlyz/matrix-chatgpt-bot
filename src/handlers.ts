@@ -197,6 +197,11 @@ export default class CommandHandler {
             return;
           }
 
+          if (!botConfig.CHATGPT_ENABLE_VISION) {
+            await sendError(this.client, `Vision is disabled in the bot settings. Last message with an image will be completely ignored.`, roomId, event.eventId);
+            return;
+          }
+
           result = await this.chatGPT.saveImage(imageUrl, conversationRef);
 
           if (bodyWithoutPrefix) {
@@ -212,6 +217,11 @@ export default class CommandHandler {
         }
 
       } else if (content.msgtype === 'm.image') {
+
+        if (!botConfig.CHATGPT_ENABLE_VISION) {
+          await sendError(this.client, `Vision is disabled in the bot settings. Last message with an image will be completely ignored.`, roomId, event.eventId);
+          return;
+        }
 
         const file = await this.client.crypto.decryptMedia(content.file);
         const imageUrl = `data:${content.info?.mimetype ?? 'image/png'};base64,${file.toString('base64')}`;
