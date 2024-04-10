@@ -3,6 +3,7 @@ import OpenAI from "openai";
 import type { ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionMessageParam, ChatCompletionRole } from "openai/resources/chat/completions";
 import crypto from 'crypto';
 import { Tiktoken, encoding_for_model } from "tiktoken";
+import { LogService } from "matrix-bot-sdk";
 
 
 export interface ChatClientOptions {
@@ -57,7 +58,18 @@ export class ChatClient {
 	) {
 		cacheOptions.namespace = cacheOptions.namespace || 'chatgpt';
 		this.conversationsCache = new Keyv(cacheOptions);
-		this.tokenEncoding = encoding_for_model(options.modelId as any);
+
+		try {
+			this.tokenEncoding = encoding_for_model(options.modelId as any);
+		} catch(ex) {
+			const fallbackTokenModel = 'gpt-4-vision-preview'
+			this.tokenEncoding = encoding_for_model(fallbackTokenModel);
+			LogService.warn(
+				'ChatClient',
+				`Model ${options.modelId} is not supported by the tiktoken, falling back to ${fallbackTokenModel} for token counting.`,
+				ex
+			)
+		}
 	}
 
 	private async getConversation(conversationRef: Partial<ConversationRef>) {
