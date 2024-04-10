@@ -303,12 +303,14 @@ function constraintInput<T extends ChatCompletionMessageParam>(
 
 		if (currentTokens + tokens > maxInputTokens) {
 			if (currentTokens === 0) {
-				throw new Error(`Prompt is too long. Max token count is ${maxInputTokens}, but prompt is ${currentTokens + tokens} tokens long.`);
+				// this is the last message and we can not fit it in our constraints
+				throw new Error(`Last message is too long. Max total prompt token count is ${maxInputTokens}, but message is ${tokens} tokens long.`);
 			}
 
 			break;
 		}
 
+		currentTokens += tokens;
 		result.unshift(message);
 	}
 
