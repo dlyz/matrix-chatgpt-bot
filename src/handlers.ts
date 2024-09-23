@@ -394,6 +394,13 @@ function transformText(
 			}
 		}
 
+		if (botConfig.CHATGPT_PROMPT_TOKEN_COST !== undefined && botConfig.CHATGPT_RESPONSE_TOKEN_COST !== undefined) {
+			const cost = (opts.usage.prompt_tokens * botConfig.CHATGPT_PROMPT_TOKEN_COST
+				+ opts.usage.completion_tokens * botConfig.CHATGPT_RESPONSE_TOKEN_COST)
+				/ 1e6;
+			usage += ` = ${(cost * 100).toFixed(2)}¢`
+		}
+
 		result += `\n\n*${usage}*`
 	}
 

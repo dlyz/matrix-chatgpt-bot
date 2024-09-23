@@ -21,8 +21,8 @@ export const botConfig = parseEnv(process.env, {
   MATRIX_THREADS:              { schema: z.boolean().default(true),                description: "Set to true if you want the bot to answer always in a new thread/conversation" },
   MATRIX_FIRST_CHUNK_SIZE:     { schema: z.number().optional(),                    description: "The size of the first flushed chunk (in chars) for each assistant response. If not set or 0, streaming will not be used." },
   MATRIX_USE_TWO_CHUNKS_FOR_FIRST_REPLY: { schema: z.boolean().default(false),     description: "Set true if your matrix client does not refreshes after the second edit of first thread answer (reproduces in Element 1.11.61)" },
-  MATRIX_GENERATING_MESSAGE:   { schema: z.string().default("*...generating...*"), description: "String that will appear in the end of the message that is still generating." },
-  MATRIX_UNEXPECTED_FINISH_REASON:{ schema: z.string().default("**UNEXPECTED FINISH REASON: {finishReason}.**"), description: "String that will appear in the end of the message that is finished by model with unexpected reason." },
+  MATRIX_GENERATING_MESSAGE:   { schema: z.string().default("*...⚒️generating⚒️...*"), description: "String that will appear in the end of the message that is still generating." },
+  MATRIX_UNEXPECTED_FINISH_REASON:{ schema: z.string().default("**❗UNEXPECTED FINISH REASON: {finishReason}.**"), description: "String that will appear in the end of the message that is finished by model with unexpected reason." },
   MATRIX_ADD_USAGE:            { schema: z.boolean().default(false),               description: "Adds usage information to the end of the message" },
   MATRIX_PREFIX_DM:            { schema: z.boolean().default(false),               description: "Set to false if you want the bot to answer to all messages in a one-to-one room" },
   MATRIX_RICH_TEXT:            { schema: z.boolean().default(true),                description: "Set to true if you want the bot to answer with enriched text" },
@@ -47,5 +47,7 @@ export const botConfig = parseEnv(process.env, {
   CHATGPT_MAX_CONTEXT_TOKENS:  { schema: z.number().default(4097), description: "Davinci models have a max context length of 4097 tokens, but you may need to change this for other models." },
   CHATGPT_MAX_PROMPT_TOKENS:   { schema: z.number().default(3097), description: "You might want to lower this to save money if using a paid model. Earlier messages will be dropped until the prompt is within the limit." },
   CHATGPT_MAX_RESPONSE_TOKENS: { schema: z.number().default(2048), description: "Considers 'thinking' tokens. You might want to lower this to save money if using a paid model." },
+  CHATGPT_PROMPT_TOKEN_COST:   { schema: z.number().optional(),    description: "$ cost per 1M prompt tokens, requires CHATGPT_RESPONSE_TOKEN_COST to be calculated" },
+  CHATGPT_RESPONSE_TOKEN_COST: { schema: z.number().optional(),    description: "$ cost per 1M completion tokens, requires CHATGPT_PROMPT_TOKEN_COST to be calculated" },
   CHATGPT_ENABLE_VISION:       { schema: z.boolean().default(true), description: "Set to false to disable accepting images." },
 });

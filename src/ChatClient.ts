@@ -241,6 +241,9 @@ export class ChatClient {
 		const oaiCompletionStream = await this.openAiClient.chat.completions.create({
 			...requestParams,
 			stream: true,
+			stream_options: {
+				include_usage: true,
+			},
 		});
 
 		let maxBufferLength = Math.max(128, this.options.firstChunkSize || 512);
@@ -255,8 +258,25 @@ export class ChatClient {
 
 		conversation.messages.push(replyMessage);
 
+		let lastChunk = undefined
+
 		for await (const oaiCompletion of oaiCompletionStream) {
 			const oaiReplyChunk = oaiCompletion.choices[0];
+
+			// usage may come after the last message
+			if (lastChunk) {
+
+				if (oaiReplyChunk) {
+					throw new Error(`Unexpected streaming chunk after the last message`);
+				}
+
+				if (oaiCompletion.usage) {
+					lastChunk.usage = oaiCompletion.usage;
+				}
+
+				continue;
+			}
+
 			const oaiReplyMessage = oaiReplyChunk.delta;
 			if (oaiReplyMessage.role) {
 				replyMessage.role = oaiReplyMessage.role;
@@ -278,7 +298,7 @@ export class ChatClient {
 					unexpectedFinishReason = oaiReplyChunk.finish_reason || undefined
 				}
 
-				yield {
+				const chunk = {
 					conversationId,
 					tailMessageId: replyMessage.id,
 					response: replyMessage.message,
@@ -286,7 +306,17 @@ export class ChatClient {
 					unexpectedFinishReason,
 					usage: oaiCompletion.usage,
 				};
+
+				if (isLastChunk) {
+					lastChunk = chunk;
+				} else {
+					yield chunk;
+				}
 			}
+		}
+
+		if (lastChunk) {
+			yield lastChunk
 		}
 
 		await this.conversationsCache.set(conversationId, conversation);
