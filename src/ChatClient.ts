@@ -1,17 +1,25 @@
 import Keyv from "keyv";
 import OpenAI from "openai";
-import type { ChatCompletionContentPart, ChatCompletionCreateParamsBase, ChatCompletionMessageParam, ChatCompletionRole } from "openai/resources/chat/completions";
+import type {
+	ChatCompletionContentPart,
+	ChatCompletionCreateParamsBase,
+	ChatCompletionMessageParam,
+	ChatCompletionRole,
+	ChatCompletionUserMessageParam
+} from "openai/resources/chat/completions";
 import crypto from 'crypto';
 import { Tiktoken, encoding_for_model } from "tiktoken";
 import { LogService } from "matrix-bot-sdk";
+import { CompletionUsage } from "openai/resources/completions";
 
+export { CompletionUsage }
 
 export interface ChatClientOptions {
 	modelId: string,
 	temperature?: number,
 	systemMessage?: string,
 	maxInputTokens?: number,
-	maxOutputTokens?: number,
+	maxCompletionTokens?: number,
 	firstChunkSize?: number,
 
 	// workaround for Element bug that does not autoupdate message after the first edit.
@@ -39,6 +47,8 @@ interface Conversation {
 export interface ChatClientResult extends ConversationRef {
 	response: string,
 	isLastChunk?: boolean,
+	unexpectedFinishReason?: string,
+	usage?: CompletionUsage
 }
 
 export interface ConversationRef {
@@ -156,7 +166,7 @@ export class ChatClient {
 			model: this.options.modelId,
 			temperature: this.options.temperature,
 			messages: oaiHistory,
-			max_tokens: this.options.maxOutputTokens,
+			max_completion_tokens: this.options.maxCompletionTokens
 		};
 
 		return {
@@ -186,7 +196,8 @@ export class ChatClient {
 			stream: false,
 		});
 
-		const oaiReplyMessage = oaiCompletion.choices[0].message;
+		const oaiReply = oaiCompletion.choices[0];
+		const oaiReplyMessage = oaiReply.message;
 
         const replyMessage = {
             id: crypto.randomUUID(),
@@ -199,10 +210,17 @@ export class ChatClient {
 
 		await this.conversationsCache.set(conversationId, conversation);
 
+		let unexpectedFinishReason = undefined
+		if (oaiReply.finish_reason !== "stop") {
+			unexpectedFinishReason = oaiReply.finish_reason || undefined
+		}
+
         return {
             response: replyMessage.message,
             conversationId,
             tailMessageId: replyMessage.id,
+			unexpectedFinishReason,
+			usage: oaiCompletion.usage,
         };
 	}
 
@@ -255,19 +273,24 @@ export class ChatClient {
 					maxBufferLength = Number.MAX_SAFE_INTEGER;
 				}
 
+				let unexpectedFinishReason = undefined
+				if (isLastChunk && oaiReplyChunk.finish_reason !== "stop") {
+					unexpectedFinishReason = oaiReplyChunk.finish_reason || undefined
+				}
+
 				yield {
 					conversationId,
 					tailMessageId: replyMessage.id,
 					response: replyMessage.message,
 					isLastChunk,
+					unexpectedFinishReason,
+					usage: oaiCompletion.usage,
 				};
 			}
 		}
 
 		await this.conversationsCache.set(conversationId, conversation);
 	}
-
-
 }
 
 
@@ -329,7 +352,7 @@ function toOaiHistory(messages: ConversationMessage[]) {
 			let parts: ChatCompletionContentPart[];
 
 			if (history.at(-1)?.role === 'user') {
-				const target = history.at(-1)!;
+				const target = history.at(-1)! as ChatCompletionUserMessageParam;
 				if (!target.content) {
 					target.content = [];
 				} else if (typeof target.content === 'string') {

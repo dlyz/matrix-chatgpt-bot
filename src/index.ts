@@ -64,7 +64,7 @@ async function main() {
     // azure: OPENAI_AZURE,
     // maxContextTokens: CHATGPT_MAX_CONTEXT_TOKENS,
     maxInputTokens: botConfig.CHATGPT_MAX_PROMPT_TOKENS,
-    maxOutputTokens: botConfig.CHATGPT_MAX_RESPONSE_TOKENS,
+    maxCompletionTokens: botConfig.CHATGPT_MAX_RESPONSE_TOKENS,
     firstChunkSize: botConfig.MATRIX_FIRST_CHUNK_SIZE,
     useTwoChunksForFirstReply: botConfig.MATRIX_THREADS && botConfig.MATRIX_USE_TWO_CHUNKS_FOR_FIRST_REPLY,
   };

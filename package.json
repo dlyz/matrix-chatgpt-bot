@@ -1,6 +1,6 @@
 {
   "name": "matrix-chatgpt-bot",
-  "version": "4.2.6",
+  "version": "4.3.0",
   "main": "dist/index.js",
   "repository": "git@github.com:matrixgpt/matrix-chatgpt-bot.git",
   "author": "Max Kammler <max.kammler@ucc.ovgu.de>",
@@ -26,7 +26,7 @@
     "keyv-file": "^0.3.0",
     "markdown-it": "^14.0.0",
     "matrix-bot-sdk": "0.7.1",
-    "openai": "^4.29.1",
+    "openai": "^4.63.0",
     "tiktoken": "^1.0.13",
     "typescript": "^5.3.3",
     "znv": "^0.4.0",
